@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -8,20 +9,29 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/emersion/go-smtp"
 	"github.com/urfave/cli/v2"
 )
 
+type MailQueue struct {
+	Mu sync.Mutex
+	M  chan Mail
+}
+
 type Config struct {
-	Smtp struct {
+	DispatchInterval int `toml:"dispatch_interval"`
+	Smtp             struct {
 		Net  string `toml:"net"`
 		Host string `toml:"host"`
 		Port int    `toml:"port"`
 	} `toml:"smtp"`
 	Auth struct {
 		AuthUsers []string `toml:"auth_users"`
+		AllowAnon bool     `toml:"allow_anon"`
 	} `toml:"auth"`
 	Ses struct {
 		Region string `toml:"region"`
@@ -71,8 +81,14 @@ func loadConfig(path string) (*Config, error) {
 
 // Run the bridge smtp server
 func run(cfg *Config) error {
+	queue := &MailQueue{
+		Mu: sync.Mutex{},
+		M:  make(chan Mail, 100),
+	}
+
 	be := &Backend{
-		Cfg: cfg,
+		Cfg:   cfg,
+		Queue: queue,
 	}
 	srv := smtp.NewServer(be)
 
@@ -81,6 +97,24 @@ func run(cfg *Config) error {
 	srv.MaxMessageBytes = 256 * int64(math.Pow(2, 20)) // 256 MiB
 	srv.MaxRecipients = 500
 	srv.AllowInsecureAuth = true
+
+	stop := make(chan bool)
+	// run the mail queue dispatcher every 5 seconds
+	go func() {
+		ticker := time.NewTicker(time.Duration(cfg.DispatchInterval) * time.Second)
+		for {
+			select {
+			case <-ticker.C:
+				dispatchQueue(queue)
+			case <-stop:
+				log.Println("Stopping mail queue dispatcher")
+				ticker.Stop()
+				close(queue.M)
+				close(stop)
+				return
+			}
+		}
+	}()
 
 	log.Println("Starting server at", srv.Addr)
 	if err := srv.ListenAndServe(); err != nil {
@@ -91,7 +125,8 @@ func run(cfg *Config) error {
 }
 
 type Backend struct {
-	Cfg *Config
+	Cfg   *Config
+	Queue *MailQueue
 }
 
 type Mail struct {
@@ -102,6 +137,7 @@ type Mail struct {
 
 type Session struct {
 	Cfg      *Config
+	Queue    *MailQueue
 	IsAuthed bool
 	AuthUser string
 	Current  Mail
@@ -109,13 +145,18 @@ type Session struct {
 }
 
 func (b *Backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
-	return &Session{
+	s := &Session{
 		Cfg:      b.Cfg,
 		IsAuthed: false,
 		AuthUser: "",
 		Current:  Mail{},
-		Mails:    []Mail{},
-	}, nil
+		Queue:    b.Queue,
+	}
+	if b.Cfg.Auth.AllowAnon {
+		log.Println("Allowing anonymous SMTP")
+		s.IsAuthed = true
+	}
+	return s, nil
 }
 
 func (s *Session) AuthPlain(username string, password string) error {
@@ -174,36 +215,51 @@ func (s *Session) Data(r io.Reader) error {
 		log.Println("Data:", string(b))
 		s.Current.MailData = b
 	}
+	s.enqueMail(&s.Current)
 	return nil
 }
 
 func (s *Session) Reset() {
-	log.Println("Queuing mail")
-	s.Mails = append(s.Mails, s.Current)
+	log.Println("Reset")
 	s.Current = Mail{}
+	s.Mails = []Mail{}
 }
 
 func (s *Session) Logout() error {
-	log.Println("Logout user from SMTP", s.AuthUser)
-	if !s.IsAuthed {
-		log.Println("Not authenticated")
-		return nil
+	log.Println("Logout")
+	return nil
+}
+
+func (s *Session) enqueMail(mail *Mail) {
+	log.Println("Enqueing mail")
+	s.Queue.Mu.Lock()
+	s.Queue.M <- *mail
+	s.Queue.Mu.Unlock()
+}
+
+func dispatchQueue(q *MailQueue) {
+	if len(q.M) == 0 {
+		return
 	}
-	if len(s.Mails) == 0 {
-		log.Println("No mails to send")
-		return nil
-	}
-	log.Println("Sending", len(s.Mails), "mails")
-	for _, m := range s.Mails {
-		log.Println("Sending mail from", m.From, "to", m.To)
+	log.Println("Dispatching mail queue of size", len(q.M))
+	q.Mu.Lock()
+	defer q.Mu.Unlock()
+	for m := range q.M {
 		if err := sesSendMail(m.From, m.To, m.MailData); err != nil {
-			return err
+			log.Println("Error sending mail:", err)
+			log.Println("Saving mail content to /tmp/smtpsesgw-mail")
+			data, err := json.Marshal(m)
+			if err != nil {
+				log.Println("Error marshalling mail:", err)
+				continue
+			}
+			os.WriteFile("/tmp/smtpsesgw-mail", data, 0644)
 		}
 	}
-	return nil
 }
 
 // TODO: Implement SES send mail
 func sesSendMail(from string, to []string, data []byte) error {
+	log.Println("Sending mail to SES")
 	return nil
 }

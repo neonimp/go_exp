@@ -1,3 +1,6 @@
+# Time in seconds between each dispatch cycle
+dispatch_interval = 5
+
 [smtp]
 net = "tcp"
 host = "0.0.0.0"
