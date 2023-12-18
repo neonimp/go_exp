@@ -8,6 +8,7 @@ port = 1025
 
 [ses]
 region = "us-east-1"
+profile = "example"
 
 [auth]
 auth_users = ["user1:pass1", "user2:pass2"]
