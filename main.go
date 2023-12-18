@@ -1,15 +1,14 @@
 package main
 
 import (
-	"encoding/json"
-	"errors"
+	"context"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"os"
-	"strings"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -23,7 +22,8 @@ type MailQueue struct {
 }
 
 type Config struct {
-	DispatchInterval int `toml:"dispatch_interval"`
+	DispatchInterval int  `toml:"dispatch_interval"`
+	DryMode          bool `toml:"dry_mode"`
 	Smtp             struct {
 		Net  string `toml:"net"`
 		Host string `toml:"host"`
@@ -81,6 +81,9 @@ func loadConfig(path string) (*Config, error) {
 
 // Run the bridge smtp server
 func run(cfg *Config) error {
+	shutdownChan := make(chan os.Signal, 1)
+	signal.Notify(shutdownChan, syscall.SIGTERM, syscall.SIGINT)
+
 	queue := &MailQueue{
 		Mu: sync.Mutex{},
 		M:  make(chan Mail, 100),
@@ -98,19 +101,22 @@ func run(cfg *Config) error {
 	srv.MaxRecipients = 500
 	srv.AllowInsecureAuth = true
 
-	stop := make(chan bool)
 	// run the mail queue dispatcher every 5 seconds
 	go func() {
 		ticker := time.NewTicker(time.Duration(cfg.DispatchInterval) * time.Second)
 		for {
 			select {
 			case <-ticker.C:
-				dispatchQueue(queue)
-			case <-stop:
+				go DispatchQueue(queue, cfg)
+			case <-shutdownChan:
 				log.Println("Stopping mail queue dispatcher")
 				ticker.Stop()
 				close(queue.M)
-				close(stop)
+				close(shutdownChan)
+				shutdownCtx := context.Background()
+				shutdownCtx, cancelFunc := context.WithDeadline(shutdownCtx, time.Now().Add(5*time.Second))
+				defer cancelFunc()
+				srv.Shutdown(shutdownCtx)
 				return
 			}
 		}
@@ -120,146 +126,6 @@ func run(cfg *Config) error {
 	if err := srv.ListenAndServe(); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-type Backend struct {
-	Cfg   *Config
-	Queue *MailQueue
-}
-
-type Mail struct {
-	From     string
-	To       []string
-	MailData []byte
-}
-
-type Session struct {
-	Cfg      *Config
-	Queue    *MailQueue
-	IsAuthed bool
-	AuthUser string
-	Current  Mail
-	Mails    []Mail
-}
-
-func (b *Backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
-	s := &Session{
-		Cfg:      b.Cfg,
-		IsAuthed: false,
-		AuthUser: "",
-		Current:  Mail{},
-		Queue:    b.Queue,
-	}
-	if b.Cfg.Auth.AllowAnon {
-		log.Println("Allowing anonymous SMTP")
-		s.IsAuthed = true
-	}
-	return s, nil
-}
-
-func (s *Session) AuthPlain(username string, password string) error {
-	log.Println("AuthPlain:", username)
-	if s.Cfg.Auth.AuthUsers == nil {
-		log.Println("No auth users")
-		return errors.New("no auth users configured")
-	}
-	for _, u := range s.Cfg.Auth.AuthUsers {
-		e := strings.Split(u, ":")
-		if len(e) != 2 {
-			continue
-		}
-		if e[0] == username && e[1] == password {
-			s.IsAuthed = true
-			s.AuthUser = username
-			return nil
-		}
-	}
-	log.Println("Invalid username or password for SMTP authentication")
-	return errors.New("invalid username or password for SMTP authentication")
-}
-
-func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
-	if !s.IsAuthed {
-		log.Println("Not authenticated")
-		return errors.New("not authenticated")
-	}
-	nMail := Mail{
-		From: from,
-	}
-	nMail.From = from
-	s.Current = nMail
-	log.Println("Mail from:", from)
-	return nil
-}
-
-func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
-	if !s.IsAuthed {
-		log.Println("Not authenticated")
-		return errors.New("not authenticated")
-	}
-	log.Println("Rcpt to:", to)
-	s.Current.To = append(s.Current.To, to)
-	return nil
-}
-
-func (s *Session) Data(r io.Reader) error {
-	if !s.IsAuthed {
-		log.Println("Not authenticated")
-		return nil
-	}
-	if b, err := io.ReadAll(r); err != nil {
-		return err
-	} else {
-		log.Println("Data:", string(b))
-		s.Current.MailData = b
-	}
-	s.enqueMail(&s.Current)
-	return nil
-}
-
-func (s *Session) Reset() {
-	log.Println("Reset")
-	s.Current = Mail{}
-	s.Mails = []Mail{}
-}
-
-func (s *Session) Logout() error {
-	log.Println("Logout")
-	return nil
-}
-
-func (s *Session) enqueMail(mail *Mail) {
-	log.Println("Enqueing mail")
-	s.Queue.Mu.Lock()
-	s.Queue.M <- *mail
-	s.Queue.Mu.Unlock()
-}
-
-func dispatchQueue(q *MailQueue) {
-	if len(q.M) == 0 {
-		return
-	}
-	log.Println("Dispatching mail queue of size", len(q.M))
-	q.Mu.Lock()
-	defer q.Mu.Unlock()
-	for m := range q.M {
-		if err := sesSendMail(m.From, m.To, m.MailData); err != nil {
-			log.Println("Error sending mail:", err)
-			log.Println("Saving mail content to /tmp/smtpsesgw-mail")
-			data, err := json.Marshal(m)
-			if err != nil {
-				log.Println("Error marshalling mail:", err)
-				continue
-			}
-			os.WriteFile("/tmp/smtpsesgw-mail", data, 0644)
-		}
-	}
-}
-
-// TODO: Implement SES send mail
-func sesSendMail(from string, to []string, data []byte) error {
-	log.Println("Sending mail to SES")
+	log.Println("Shutdown complete, exiting")
 	return nil
 }
