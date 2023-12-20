@@ -38,15 +38,35 @@ type Config struct {
 	} `toml:"ses"`
 }
 
+type Rangeable interface {
+	int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32 | uint64 | float32 | float64
+}
+
+func inRange[T Rangeable](v T, min T, max T) bool {
+	return v >= min && v <= max
+}
+
 func main() {
 	cli := cli.App{
-		Name:  "AWS SES SMTP to API Gateway",
+		Name:  "AWS SES SMTP to API Bridge",
 		Usage: "smtpsesgw",
 		Flags: []cli.Flag{
 			&cli.PathFlag{
 				Name:     "config",
 				Aliases:  []string{"c"},
 				Usage:    "Path to config file",
+				Required: false,
+			},
+			&cli.IntFlag{
+				Name:     "port",
+				Aliases:  []string{"p"},
+				Usage:    "SMTP port to listen on",
+				Required: false,
+			},
+			&cli.StringFlag{
+				Name:     "host",
+				Aliases:  []string{"H"},
+				Usage:    "SMTP host to listen on",
 				Required: false,
 			},
 		},
@@ -57,6 +77,16 @@ func main() {
 			}
 
 			cfg, err := loadConfig(cfgPath)
+			if v := c.Int("port"); v != 0 {
+				if !inRange(v, 1, 65535) {
+					return fmt.Errorf("port must be between 1 and 65535")
+				}
+				cfg.Smtp.Port = v
+			}
+			if v := c.String("host"); v != "" {
+				cfg.Smtp.Host = v
+			}
+
 			if err != nil {
 				return err
 			}
