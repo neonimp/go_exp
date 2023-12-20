@@ -53,7 +53,7 @@ func main() {
 		Action: func(c *cli.Context) error {
 			cfgPath := c.String("config")
 			if cfgPath == "" {
-				cfgPath = "/etc/smtpsesgw/config.toml"
+				cfgPath = "/etc/smtpbridge/config.toml"
 			}
 
 			cfg, err := loadConfig(cfgPath)
