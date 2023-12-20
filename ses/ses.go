@@ -1,4 +1,4 @@
-package main
+package ses
 
 import (
 	"errors"
@@ -8,14 +8,16 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ses"
+	"github.com/neonimp/smtpbridge/backend"
+	"github.com/neonimp/smtpbridge/config"
 )
 
-func bodyParse(m *Mail) *ses.Body {
+func bodyParse(m *backend.Mail) *ses.Body {
 	if m.Headers == nil || m.Headers["Content-Type"] == "" {
 		return &ses.Body{
 			Text: &ses.Content{
 				Data:    aws.String(m.Body),
-				Charset: aws.String(GetCharset(m)),
+				Charset: aws.String(m.GetCharset()),
 			},
 		}
 	}
@@ -23,20 +25,20 @@ func bodyParse(m *Mail) *ses.Body {
 		return &ses.Body{
 			Html: &ses.Content{
 				Data:    aws.String(m.Body),
-				Charset: aws.String(GetCharset(m)),
+				Charset: aws.String(m.GetCharset()),
 			},
 		}
 	} else {
 		return &ses.Body{
 			Text: &ses.Content{
 				Data:    aws.String(m.Body),
-				Charset: aws.String(GetCharset(m)),
+				Charset: aws.String(m.GetCharset()),
 			},
 		}
 	}
 }
 
-func SendMail(m *Mail, c *Config) error {
+func SendMail(m *backend.Mail, c *config.Config) error {
 	if m == nil {
 		return errors.New("mail is nil")
 	}
@@ -52,7 +54,7 @@ func SendMail(m *Mail, c *Config) error {
 	// Create the SES session.
 	svc := ses.New(sess)
 	dest := &ses.Destination{
-		ToAddresses: GetDestList(m),
+		ToAddresses: m.GetDestList(),
 	}
 
 	// Assemble the email.
@@ -61,8 +63,8 @@ func SendMail(m *Mail, c *Config) error {
 		Destination: dest,
 		Message: &ses.Message{
 			Subject: &ses.Content{
-				Data:    aws.String(GetSubject(m)),
-				Charset: aws.String(GetCharset(m)),
+				Data:    aws.String(m.GetSubject()),
+				Charset: aws.String(m.GetCharset()),
 			},
 			Body: bodyParse(m),
 		},

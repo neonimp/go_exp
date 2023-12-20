@@ -13,30 +13,11 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/emersion/go-smtp"
+	"github.com/neonimp/smtpbridge/backend"
+	"github.com/neonimp/smtpbridge/config"
+	"github.com/neonimp/smtpbridge/ses"
 	"github.com/urfave/cli/v2"
 )
-
-type MailQueue struct {
-	Mu sync.Mutex
-	M  chan Mail
-}
-
-type Config struct {
-	DispatchInterval int  `toml:"dispatch_interval"`
-	DryMode          bool `toml:"dry_mode"`
-	Smtp             struct {
-		Net  string `toml:"net"`
-		Host string `toml:"host"`
-		Port int    `toml:"port"`
-	} `toml:"smtp"`
-	Auth struct {
-		AuthUsers []string `toml:"auth_users"`
-		AllowAnon bool     `toml:"allow_anon"`
-	} `toml:"auth"`
-	Ses struct {
-		Region string `toml:"region"`
-	} `toml:"ses"`
-}
 
 type Rangeable interface {
 	int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32 | uint64 | float32 | float64
@@ -100,8 +81,8 @@ func main() {
 	}
 }
 
-func loadConfig(path string) (*Config, error) {
-	cfg := &Config{}
+func loadConfig(path string) (*config.Config, error) {
+	cfg := &config.Config{}
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, err
 	}
@@ -110,16 +91,16 @@ func loadConfig(path string) (*Config, error) {
 }
 
 // Run the bridge smtp server
-func run(cfg *Config) error {
+func run(cfg *config.Config) error {
 	shutdownChan := make(chan os.Signal, 1)
 	signal.Notify(shutdownChan, syscall.SIGTERM, syscall.SIGINT)
 
-	queue := &MailQueue{
+	queue := &backend.MailQueue{
 		Mu: sync.Mutex{},
-		M:  make(chan Mail, 100),
+		M:  make(chan backend.Mail, 100),
 	}
 
-	be := &Backend{
+	be := &backend.Backend{
 		Cfg:   cfg,
 		Queue: queue,
 	}
@@ -137,7 +118,7 @@ func run(cfg *Config) error {
 		for {
 			select {
 			case <-ticker.C:
-				go DispatchQueue(queue, cfg)
+				go backend.DispatchQueue(queue, cfg, ses.SendMail)
 			case <-shutdownChan:
 				log.Println("Stopping mail queue dispatcher")
 				ticker.Stop()

@@ -1,4 +1,4 @@
-package main
+package backend
 
 import (
 	"encoding/json"
@@ -7,12 +7,21 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/emersion/go-smtp"
+	"github.com/neonimp/smtpbridge/config"
 )
 
+type SendMail func(m *Mail, c *config.Config) error
+
+type MailQueue struct {
+	Mu sync.Mutex
+	M  chan Mail
+}
+
 type Backend struct {
-	Cfg   *Config
+	Cfg   *config.Config
 	Queue *MailQueue
 }
 
@@ -25,7 +34,7 @@ type Mail struct {
 }
 
 type Session struct {
-	Cfg      *Config
+	Cfg      *config.Config
 	Queue    *MailQueue
 	IsAuthed bool
 	AuthUser string
@@ -128,7 +137,7 @@ func (s *Session) EnqueueMail(mail *Mail) {
 	s.Queue.Mu.Unlock()
 }
 
-func DispatchQueue(q *MailQueue, c *Config) {
+func DispatchQueue(q *MailQueue, c *config.Config, sm SendMail) {
 	if len(q.M) == 0 {
 		return
 	}
@@ -136,7 +145,7 @@ func DispatchQueue(q *MailQueue, c *Config) {
 	q.Mu.Lock()
 	defer q.Mu.Unlock()
 	for m := range q.M {
-		if err := SendMail(&m, c); err != nil {
+		if err := sm(&m, c); err != nil {
 			log.Println("Error sending mail:", err)
 			log.Println("Saving mail content to /tmp/smtpsesgw-mail")
 			data, err := json.Marshal(m)
@@ -184,7 +193,7 @@ func parseBody(data []byte) string {
 	return strings.Join(body, "\n")
 }
 
-func GetDestList(m *Mail) []*string {
+func (m *Mail) GetDestList() []*string {
 	var dest []*string
 	for _, d := range m.To {
 		dest = append(dest, &d)
@@ -192,14 +201,14 @@ func GetDestList(m *Mail) []*string {
 	return dest
 }
 
-func GetSubject(m *Mail) string {
+func (m *Mail) GetSubject() string {
 	if m.Headers == nil {
 		return ""
 	}
 	return m.Headers["Subject"]
 }
 
-func GetCharset(m *Mail) string {
+func (m *Mail) GetCharset() string {
 	if m.Headers == nil {
 		return "UTF-8"
 	}
