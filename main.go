@@ -48,7 +48,7 @@ func inRange[T Rangeable](v T, min T, max T) bool {
 
 func main() {
 	cli := cli.App{
-		Name:  "AWS SES SMTP to API Bridge",
+		Name:  "SMTP to API Bridge",
 		Usage: "smtpsesgw",
 		Flags: []cli.Flag{
 			&cli.PathFlag{

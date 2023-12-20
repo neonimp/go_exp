@@ -183,3 +183,33 @@ func parseBody(data []byte) string {
 	}
 	return strings.Join(body, "\n")
 }
+
+func GetDestList(m *Mail) []*string {
+	var dest []*string
+	for _, d := range m.To {
+		dest = append(dest, &d)
+	}
+	return dest
+}
+
+func GetSubject(m *Mail) string {
+	if m.Headers == nil {
+		return ""
+	}
+	return m.Headers["Subject"]
+}
+
+func GetCharset(m *Mail) string {
+	if m.Headers == nil {
+		return "UTF-8"
+	}
+	if m.Headers["Content-Type"] == "" {
+		return "UTF-8"
+	}
+	raw := strings.Split(m.Headers["Content-Type"], "charset=")
+	if len(raw) != 2 {
+		return "UTF-8"
+	}
+	set := strings.ReplaceAll(raw[1], "\"", "")
+	return set
+}

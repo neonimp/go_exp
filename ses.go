@@ -10,42 +10,12 @@ import (
 	"github.com/aws/aws-sdk-go/service/ses"
 )
 
-func mailDestLister(m *Mail) []*string {
-	var dest []*string
-	for _, d := range m.To {
-		dest = append(dest, aws.String(d))
-	}
-	return dest
-}
-
-func getSubject(m *Mail) string {
-	if m.Headers == nil {
-		return ""
-	}
-	return m.Headers["Subject"]
-}
-
-func getCharset(m *Mail) string {
-	if m.Headers == nil {
-		return "UTF-8"
-	}
-	if m.Headers["Content-Type"] == "" {
-		return "UTF-8"
-	}
-	raw := strings.Split(m.Headers["Content-Type"], "charset=")
-	if len(raw) != 2 {
-		return "UTF-8"
-	}
-	set := strings.ReplaceAll(raw[1], "\"", "")
-	return set
-}
-
 func bodyParse(m *Mail) *ses.Body {
 	if m.Headers == nil || m.Headers["Content-Type"] == "" {
 		return &ses.Body{
 			Text: &ses.Content{
 				Data:    aws.String(m.Body),
-				Charset: aws.String(getCharset(m)),
+				Charset: aws.String(GetCharset(m)),
 			},
 		}
 	}
@@ -53,20 +23,24 @@ func bodyParse(m *Mail) *ses.Body {
 		return &ses.Body{
 			Html: &ses.Content{
 				Data:    aws.String(m.Body),
-				Charset: aws.String(getCharset(m)),
+				Charset: aws.String(GetCharset(m)),
 			},
 		}
 	} else {
 		return &ses.Body{
 			Text: &ses.Content{
 				Data:    aws.String(m.Body),
-				Charset: aws.String(getCharset(m)),
+				Charset: aws.String(GetCharset(m)),
 			},
 		}
 	}
 }
 
 func SendMail(m *Mail, c *Config) error {
+	if m == nil {
+		return errors.New("mail is nil")
+	}
+
 	sess, err := session.NewSession(&aws.Config{
 		Region:                        aws.String(c.Ses.Region),
 		CredentialsChainVerboseErrors: aws.Bool(true),
@@ -78,7 +52,7 @@ func SendMail(m *Mail, c *Config) error {
 	// Create the SES session.
 	svc := ses.New(sess)
 	dest := &ses.Destination{
-		ToAddresses: mailDestLister(m),
+		ToAddresses: GetDestList(m),
 	}
 
 	// Assemble the email.
@@ -87,8 +61,8 @@ func SendMail(m *Mail, c *Config) error {
 		Destination: dest,
 		Message: &ses.Message{
 			Subject: &ses.Content{
-				Data:    aws.String(getSubject(m)),
-				Charset: aws.String(getCharset(m)),
+				Data:    aws.String(GetSubject(m)),
+				Charset: aws.String(GetCharset(m)),
 			},
 			Body: bodyParse(m),
 		},
