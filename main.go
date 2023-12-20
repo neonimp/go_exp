@@ -92,6 +92,7 @@ func loadConfig(path string) (*config.Config, error) {
 
 // Run the bridge smtp server
 func run(cfg *config.Config) error {
+	var smfn backend.SendMail
 	shutdownChan := make(chan os.Signal, 1)
 	signal.Notify(shutdownChan, syscall.SIGTERM, syscall.SIGINT)
 
@@ -111,6 +112,12 @@ func run(cfg *config.Config) error {
 	srv.MaxMessageBytes = 256 * int64(math.Pow(2, 20)) // 256 MiB
 	srv.MaxRecipients = 500
 	srv.AllowInsecureAuth = true
+	switch cfg.Sender.Provider {
+	case "ses":
+		smfn = ses.SendMail
+	default:
+		return fmt.Errorf("unknown sender provider: %s", cfg.Sender.Provider)
+	}
 
 	// run the mail queue dispatcher every 5 seconds
 	go func() {
@@ -118,7 +125,7 @@ func run(cfg *config.Config) error {
 		for {
 			select {
 			case <-ticker.C:
-				go backend.DispatchQueue(queue, cfg, ses.SendMail)
+				go backend.DispatchQueue(queue, cfg, smfn)
 			case <-shutdownChan:
 				log.Println("Stopping mail queue dispatcher")
 				ticker.Stop()

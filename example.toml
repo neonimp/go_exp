@@ -6,9 +6,11 @@ net = "tcp"
 host = "0.0.0.0"
 port = 1025
 
-[ses]
+[sender]
+provider = "ses"
+
+[sender.settings]
 region = "us-east-1"
-profile = "example"
 
 [auth]
 auth_users = ["user1:pass1", "user2:pass2"]

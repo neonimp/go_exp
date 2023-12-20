@@ -12,6 +12,11 @@ import (
 	"github.com/neonimp/smtpbridge/config"
 )
 
+type SesConfig struct {
+	Region  string
+	Profile string
+}
+
 func bodyParse(m *backend.Mail) *ses.Body {
 	if m.Headers == nil || m.Headers["Content-Type"] == "" {
 		return &ses.Body{
@@ -39,12 +44,16 @@ func bodyParse(m *backend.Mail) *ses.Body {
 }
 
 func SendMail(m *backend.Mail, c *config.Config) error {
+	reg, ok := c.GetProviderStringSetting("region")
+	if !ok {
+		return errors.New("region not set")
+	}
 	if m == nil {
 		return errors.New("mail is nil")
 	}
 
 	sess, err := session.NewSession(&aws.Config{
-		Region:                        aws.String(c.Ses.Region),
+		Region:                        aws.String(reg),
 		CredentialsChainVerboseErrors: aws.Bool(true),
 	})
 	if err != nil {
